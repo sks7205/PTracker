@@ -420,12 +420,15 @@ function showModal(html) {
 function removeModal() { const el=document.getElementById("modal-overlay"); if(el) el.remove(); }
 
 // ══════════════════════════════════════
-//  AUTOCOMPLETE — Complete rewrite
-//  Strategy: NO blur handler at all.
-//  List closes only when item is tapped
-//  or user taps anywhere outside.
+//  AUTOCOMPLETE
+//  ROOT FIX: Never pass strings through
+//  onclick HTML attributes — they break
+//  on special chars and quotes.
+//  Instead: store matches in a JS Map,
+//  reference by numeric index only.
 // ══════════════════════════════════════
-let acTarget = null; // which input is currently active
+let acTarget = null;
+const acStore = {}; // listId -> { matches[], inputId, field }
 
 function acGetSuggestions(field, query) {
   if (!query) return [];
@@ -444,36 +447,48 @@ function acShow(field, inputId, listId) {
   const query = input.value;
   const matches = acGetSuggestions(field, query);
   if (!matches.length) { list.style.display="none"; return; }
+
+  // Store matches in JS — DO NOT pass values through HTML attributes
+  acStore[listId] = { matches, inputId, field };
+
   const q = query.toLowerCase();
-  list.innerHTML = matches.map(m=>{
+  list.innerHTML = matches.map((m, idx)=>{
     const i = m.toLowerCase().indexOf(q);
-    const hi = i>=0 ? esc(m.slice(0,i))+"<b>"+esc(m.slice(i,i+q.length))+"</b>"+esc(m.slice(i+q.length)) : esc(m);
-    // Use both touchend and click — touchend fires first on mobile, click is fallback for desktop
-    return `<div class="ac-item"
-      onclick="acPick(event,'${inputId}','${field}',${JSON.stringify(m)},'${listId}')"
-      ontouchend="acPick(event,'${inputId}','${field}',${JSON.stringify(m)},'${listId}')"
-      >${hi}</div>`;
+    const hi = i>=0
+      ? esc(m.slice(0,i))+"<b>"+esc(m.slice(i,i+q.length))+"</b>"+esc(m.slice(i+q.length))
+      : esc(m);
+    // Pass only the numeric index — completely safe in HTML attribute
+    return `<div class="ac-item" data-idx="${idx}">${hi}</div>`;
   }).join("");
+
+  // Attach listeners directly to DOM elements — no attribute encoding needed
+  list.querySelectorAll(".ac-item").forEach(el=>{
+    const handler = e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = parseInt(el.getAttribute("data-idx"));
+      const store = acStore[listId];
+      if (!store) return;
+      const value = store.matches[idx];
+      const inp = document.getElementById(store.inputId);
+      if (inp) inp.value = value;
+      list.style.display="none";
+      acTarget = null;
+      // Auto-fill contact when receiver picked
+      if (store.field==="receiver") {
+        const match = permits.find(p=>p.receiver===value&&p.contactNo);
+        if (match) { const c=document.getElementById("f-contact"); if(c&&!c.value) c.value=match.contactNo; }
+      }
+    };
+    el.addEventListener("touchend", handler, {passive:false});
+    el.addEventListener("click", handler);
+  });
+
   list.style.display="block";
   acTarget = listId;
 }
 
-function acPick(event, inputId, field, value, listId) {
-  event.preventDefault();
-  event.stopPropagation();
-  const input = document.getElementById(inputId);
-  if (input) input.value = value;
-  const list = document.getElementById(listId);
-  if (list) list.style.display="none";
-  acTarget = null;
-  // Auto-fill contact when receiver is picked
-  if (field==="receiver") {
-    const match = permits.find(p=>p.receiver===value&&p.contactNo);
-    if (match) { const c=document.getElementById("f-contact"); if(c&&!c.value) c.value=match.contactNo; }
-  }
-}
-
-// Close all dropdowns when tapping outside
+// Close dropdown when tapping outside
 document.addEventListener("touchstart", e=>{
   if (!acTarget) return;
   const list = document.getElementById(acTarget);
